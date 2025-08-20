@@ -182,13 +182,28 @@ class ExtractionService(llmService: LlmService, dbService: DatabaseService) {
       "gpt-4o" // Vision model used for images
     )
     
-    // Update file status to completed
-    dbService.insertFile(fileId, "", 0L, fileType, "", Array.empty[Byte], "completed", None)
+    // Update file status to completed without overwriting original bytes/metadata
+    dbService.getFile(fileId) match {
+      case Some(file) =>
+        dbService.insertFile(
+          file.id,
+          file.filename,
+          file.size,
+          file.fileType,
+          file.checksum,
+          file.content,
+          "completed",
+          None
+        )
+      case None =>
+        logger.warn(s"processWithLLMImage: file $fileId not found in DB when updating status")
+    }
     
+    val fileOpt = dbService.getFile(fileId)
     UploadResponse(
       fileId = fileId,
-      filename = "", // Will be filled from database
-      fileSize = imageBytes.length.toLong,
+      filename = fileOpt.map(_.filename).getOrElse("unknown"),
+      fileSize = fileOpt.map(_.size).getOrElse(imageBytes.length.toLong),
       fileType = fileType,
       category = categoryResult.category,
       confidenceScore = categoryResult.confidence_score,

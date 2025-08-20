@@ -144,22 +144,20 @@ class FileRoutes(
   // Download file endpoint
   get("/files/:fileId/download") {
     val fileId = params("fileId")
-    
-    Try {
-      fileService.fetchFile(fileId) match {
-        case Some(file) =>
-          logger.debug(s"Serving download for file: $fileId")
-          response.setHeader("Content-Type", file.contentType)
-          response.setHeader("Content-Disposition", s"attachment; filename=\"${file.filename}\"")
-          file.content
-        case None =>
-          halt(404, "File not found")
-      }
-    } match {
-      case Success(result) => result
-      case Failure(error) =>
-        logger.error(s"Failed to download file: ${error.getMessage}", error)
-        halt(500, s"Download failed: ${error.getMessage}")
+    // Read from DB (persistent), not in-memory store, to survive restarts
+    dbService.getFile(fileId) match {
+      case Some(f) =>
+        logger.debug(s"Serving download for file: $fileId")
+        val mime = f.fileType.toLowerCase match {
+          case "pdf" => "application/pdf"
+          case "png" => "image/png"
+          case "jpeg" | "jpg" => "image/jpeg"
+          case _ => "application/octet-stream"
+        }
+        response.setHeader("Content-Type", mime)
+        response.setHeader("Content-Disposition", s"attachment; filename=\"${f.filename}\"")
+        f.content
+      case None => halt(404, "File not found")
     }
   }
   
