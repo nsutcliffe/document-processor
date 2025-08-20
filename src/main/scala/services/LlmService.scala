@@ -152,10 +152,24 @@ Return ONLY valid JSON exactly matching:
       case Right(result) =>
         logger.debug(s"Successfully parsed categorization: ${result.category} (${result.confidence_score})")
         result
-      case Left(error) =>
-        logger.error(s"Failed to parse categorization response: $error")
-        logger.debug(s"Raw response: $response")
-        throw new RuntimeException(s"Failed to parse categorization: $error")
+      case Left(_) =>
+        // Attempt a one-shot format correction
+        val schemaPrompt =
+          """You MUST output ONLY valid JSON matching exactly this schema:
+          {
+            "category": "invoice|marketplace_listing_screenshot|chat_screenshot|website_screenshot|other",
+            "confidence_score": number,
+            "reasoning": "string"
+          }
+          Do not include any extra text.
+          """.stripMargin
+        val corrected = callOpenRouter(model, schemaPrompt, response)
+        parseJson[CategoryResult](corrected) match {
+          case Right(r2) => r2
+          case Left(err2) =>
+            logger.error(s"Failed to parse categorization after correction: $err2")
+            throw new RuntimeException(s"Failed to parse categorization: $err2")
+        }
     }
   }
 
@@ -186,10 +200,26 @@ Return ONLY JSON exactly matching:
       case Right(result) =>
         logger.debug(s"Successfully parsed extraction: ${result.entities.size} entities, ${result.dates.size} dates, ${result.tables.size} tables")
         result
-      case Left(error) =>
-        logger.error(s"Failed to parse extraction response: $error")
-        logger.debug(s"Raw response: $response")
-        throw new RuntimeException(s"Failed to parse extraction: $error")
+      case Left(_) =>
+        // Attempt a one-shot format correction
+        val schemaPrompt =
+          """The previous assistant response was not valid JSON.
+          You MUST output ONLY valid JSON matching exactly this schema:
+          {
+            "entities": [ { "type": "name|place|phone|ip_address|account_id|payment_method|merchant", "value": "string", "confidence": number }, ...],
+            "dates": ["YYYY-MM-DD", ...],
+            "tables": [ { "table_name": "string", "headers": ["..."], "rows": [["..."], ["..."]] } ]
+          }
+          If you cannot extract anything, return empty arrays for all fields.
+          Do not include any extra text.
+          """.stripMargin
+        val corrected = callOpenRouter(model, schemaPrompt, response)
+        parseJson[ExtractionResult](corrected) match {
+          case Right(r2) => r2
+          case Left(err2) =>
+            logger.error(s"Failed to parse extraction after correction: $err2")
+            throw new RuntimeException(s"Failed to parse extraction: $err2")
+        }
     }
   }
 
