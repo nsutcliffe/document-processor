@@ -1,8 +1,8 @@
 package services
 
 import scalikejdbc._
-import cats.effect.{IO, Resource}
 import java.time.{Instant, ZoneId}
+import org.slf4j.LoggerFactory
 
 final case class DbFileRow(
   id: String,
@@ -25,11 +25,48 @@ final case class DbExtractionRow(
   modelUsed: String
 )
 
-class DatabaseService {
-  def init(): IO[Unit] = IO {
+class DatabaseService(useInMemory: Boolean = false) {
+  
+  private val logger = LoggerFactory.getLogger(getClass)
+
+  def init(): Unit = {
+    logger.info("Initializing database...")
     Class.forName("org.h2.Driver")
-    ConnectionPool.singleton("jdbc:h2:mem:tunic;DB_CLOSE_DELAY=-1", "sa", "")
+    
+    if (useInMemory) {
+      // Use in-memory database for tests with unique name to avoid conflicts
+      val dbName = s"test_${System.currentTimeMillis()}_${scala.util.Random.nextInt(1000)}"
+      
+      // Close any existing connection pool to avoid conflicts
+      try {
+        ConnectionPool.close()
+      } catch {
+        case _: Exception => // Ignore if no pool exists
+      }
+      
+      ConnectionPool.singleton(s"jdbc:h2:mem:$dbName;DB_CLOSE_DELAY=-1", "sa", "")
+      logger.info(s"Using in-memory H2 database for testing: $dbName")
+    } else {
+      // Create data directory if it doesn't exist
+      val dataDir = new java.io.File("./data")
+      if (!dataDir.exists()) {
+        dataDir.mkdirs()
+        logger.info("Created data directory: ./data")
+      }
+      
+      // Only set up connection pool if not already configured
+      try {
+        ConnectionPool.get()
+        logger.info("Using existing H2 database connection")
+      } catch {
+        case _: Exception =>
+          ConnectionPool.singleton("jdbc:h2:./data/tunic", "sa", "")
+          logger.info("Using persistent H2 database: ./data/tunic.mv.db")
+      }
+    }
+    
     implicit val session: DBSession = AutoSession
+    
     sql"""
       CREATE TABLE IF NOT EXISTS files (
         id VARCHAR(36) PRIMARY KEY,
@@ -56,6 +93,8 @@ class DatabaseService {
         FOREIGN KEY (file_id) REFERENCES files(id)
       )
     """.execute.apply()
+    
+    logger.info("Database tables initialized successfully")
   }
 
   def insertFile(
@@ -67,7 +106,8 @@ class DatabaseService {
     content: Array[Byte],
     status: String,
     error: Option[String]
-  ): IO[Unit] = IO {
+  ): Unit = {
+    logger.debug(s"Inserting/updating file: $id ($filename) - status: $status")
     implicit val session: DBSession = AutoSession
     sql"""
       MERGE INTO files (id, filename, file_size, file_type, checksum, file_content, upload_timestamp, processing_status, error_message)
@@ -75,7 +115,8 @@ class DatabaseService {
     """.bind(id, filename, size, fileType, checksum, content, status, error.orNull).update.apply()
   }
 
-  def getFile(fileId: String): IO[Option[DbFileRow]] = IO {
+  def getFile(fileId: String): Option[DbFileRow] = {
+    logger.debug(s"Getting file: $fileId")
     implicit val session: DBSession = ReadOnlyAutoSession
     sql"""
       SELECT id, filename, file_size, file_type, checksum, file_content, upload_timestamp, processing_status, error_message
@@ -102,7 +143,8 @@ class DatabaseService {
     confidence: Double,
     dataJson: String,
     modelUsed: String
-  ): IO[Unit] = IO {
+  ): Unit = {
+    logger.debug(s"Inserting extraction: $id for file $fileId - category: $category")
     implicit val session: DBSession = AutoSession
     sql"""
       INSERT INTO extractions
@@ -113,7 +155,8 @@ class DatabaseService {
       .update.apply()
   }
 
-  def fetchExtraction(fileId: String): IO[Option[DbExtractionRow]] = IO {
+  def fetchExtraction(fileId: String): Option[DbExtractionRow] = {
+    logger.debug(s"Fetching extraction for file: $fileId")
     implicit val session: DBSession = ReadOnlyAutoSession
     sql"""
       SELECT file_id, category, confidence_score, extracted_data_json, extraction_timestamp, model_used
@@ -136,5 +179,3 @@ class DatabaseService {
 object DatabaseService {
   val instance = new DatabaseService()
 }
-
-

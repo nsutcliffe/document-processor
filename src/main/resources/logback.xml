@@ -1,0 +1,22 @@
+<configuration>
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- Set root logger to INFO to reduce noise -->
+    <root level="INFO">
+        <appender-ref ref="STDOUT" />
+    </root>
+
+    <!-- Reduce Jetty logging to WARN level -->
+    <logger name="org.eclipse.jetty" level="WARN" />
+    <logger name="org.scalatra" level="INFO" />
+    
+    <!-- Keep our application logging at INFO -->
+    <logger name="app" level="INFO" />
+    <logger name="services" level="INFO" />
+    <logger name="routes" level="INFO" />
+    <logger name="utils" level="INFO" />
+</configuration>

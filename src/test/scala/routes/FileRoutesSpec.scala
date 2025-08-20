@@ -1,88 +1,67 @@
 package routes
 
-import org.scalatest.flatspec.AsyncFlatSpec
+import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
-import cats.effect.testing.scalatest.AsyncIOSpec
-import cats.effect.IO
-import org.http4s._
-import org.http4s.implicits._
-import org.http4s.multipart._
-import io.circe.parser._
-import java.nio.charset.StandardCharsets
+import services.{FileService, LlmService, DatabaseService, ExtractionService}
+import config.AppConfig
+import org.mockito.Mockito._
+import org.scalatestplus.mockito.MockitoSugar
 
-class FileRoutesSpec extends AsyncFlatSpec with Matchers with AsyncIOSpec {
+class FileRoutesSpec extends AnyFlatSpec with Matchers with MockitoSugar {
 
-  val routes = new FileRoutes().routes
+  // Create mock services for testing
+  val mockFileService = mock[FileService]
+  val mockLlmService = mock[LlmService]
+  val mockDbService = mock[DatabaseService]
+  val mockExtractionService = mock[ExtractionService]
 
-  "FileRoutes upload endpoint" should "reject requests without file part" in {
-    val request = Request[IO](Method.POST, uri"/api/files/upload")
-      .withEntity("not multipart data")
+  val fileRoutes = new FileRoutes(mockFileService, mockLlmService, mockDbService, mockExtractionService)
 
-    routes.orNotFound(request).flatMap { response =>
-      IO {
-        response.status shouldBe Status.BadRequest
-      }
-    }
+  "FileRoutes error handling" should "return user-friendly messages for API key errors" in {
+    val error = new RuntimeException("OPENROUTER_API_KEY environment variable not set")
+    val friendlyMessage = fileRoutes.getUserFriendlyErrorMessage(error)
+    friendlyMessage should include("API configuration error")
   }
 
-  it should "handle multipart requests with file" in {
-    val fileContent = "test file content"
-    val fileBytes = fileContent.getBytes(StandardCharsets.UTF_8)
-    
-    val part = Part.fileData[IO]("file", "test.txt", fs2.Stream.emits(fileBytes))
-    val multipart = Multipart[IO](Vector(part))
-    
-    val request = Request[IO](Method.POST, uri"/api/files/upload")
-      .withEntity(multipart)
-      .withHeaders(multipart.headers)
-
-    routes.orNotFound(request).flatMap { response =>
-      response.as[String].map { body =>
-        // Should return JSON response (either success or error)
-        response.status should (equal(Status.Ok) or equal(Status.BadRequest))
-        body should include("fileId")
-      }
-    }
+  it should "return user-friendly messages for categorization errors" in {
+    val error = new RuntimeException("Failed to parse categorization response")
+    val friendlyMessage = fileRoutes.getUserFriendlyErrorMessage(error)
+    friendlyMessage should include("Unable to categorize this document")
   }
 
-  "FileRoutes get endpoint" should "handle file retrieval requests" in {
-    val request = Request[IO](Method.GET, uri"/api/files/test-file-id")
-
-    routes.orNotFound(request).flatMap { response =>
-      IO {
-        // Should return either the file data or 404
-        response.status should (equal(Status.Ok) or equal(Status.NotFound))
-      }
-    }
+  it should "return user-friendly messages for extraction errors" in {
+    val error = new RuntimeException("Failed to parse extraction response")
+    val friendlyMessage = fileRoutes.getUserFriendlyErrorMessage(error)
+    friendlyMessage should include("Unable to extract content")
   }
 
-  "FileRoutes download endpoint" should "handle download requests" in {
-    val request = Request[IO](Method.GET, uri"/api/files/test-file-id/download")
-
-    routes.orNotFound(request).flatMap { response =>
-      IO {
-        // Should return either the file or 404
-        response.status should (equal(Status.Ok) or equal(Status.NotFound))
-      }
-    }
+  it should "return user-friendly messages for timeout errors" in {
+    val error = new RuntimeException("Request timeout occurred")
+    val friendlyMessage = fileRoutes.getUserFriendlyErrorMessage(error)
+    friendlyMessage should include("Document processing timed out")
   }
 
-  "Error handling" should "return user-friendly messages" in {
-    val routes = new FileRoutes()
-    
-    // Test the private error message function through reflection or create a test helper
-    val testErrors = Map(
-      "OPENROUTER_API_KEY environment variable not set" -> "API configuration error",
-      "Failed to parse categorization" -> "Unable to categorize this document",
-      "timeout" -> "Document processing timed out",
-      "429" -> "Service is busy",
-      "500" -> "AI service is temporarily unavailable"
-    )
+  it should "return user-friendly messages for rate limit errors" in {
+    val error = new RuntimeException("HTTP 429 Too Many Requests")
+    val friendlyMessage = fileRoutes.getUserFriendlyErrorMessage(error)
+    friendlyMessage should include("Service is busy")
+  }
 
-    testErrors.foreach { case (error, expectedMessage) =>
-      val friendlyMessage = routes.getUserFriendlyErrorMessage(new RuntimeException(error))
-      friendlyMessage should include(expectedMessage.split(" ").head.toLowerCase)
-    }
-    succeed
+  it should "return user-friendly messages for server errors" in {
+    val error = new RuntimeException("HTTP 500 Internal Server Error")
+    val friendlyMessage = fileRoutes.getUserFriendlyErrorMessage(error)
+    friendlyMessage should include("AI service is temporarily unavailable")
+  }
+
+  it should "return user-friendly messages for duplicate file errors" in {
+    val error = new RuntimeException("Unique index or primary key violation")
+    val friendlyMessage = fileRoutes.getUserFriendlyErrorMessage(error)
+    friendlyMessage should include("This file is already being processed")
+  }
+
+  it should "return generic message for unknown errors" in {
+    val error = new RuntimeException("Some unexpected error occurred")
+    val friendlyMessage = fileRoutes.getUserFriendlyErrorMessage(error)
+    friendlyMessage should include("Unable to process this document")
   }
 }

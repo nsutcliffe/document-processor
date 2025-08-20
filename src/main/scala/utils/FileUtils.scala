@@ -2,16 +2,17 @@ package utils
 
 import org.apache.pdfbox.pdmodel.PDDocument
 import org.apache.tika.Tika
-import cats.effect.IO
 import java.io.ByteArrayInputStream
+import org.slf4j.LoggerFactory
 
 object FileUtils {
   
+  private val logger = LoggerFactory.getLogger(getClass)
   private val tika = new Tika()
   
   def detectFileType(bytes: Array[Byte], filename: String): String = {
     val detected = tika.detect(bytes, filename)
-    println(s"[DEBUG] FileUtils.detectFileType: Tika detected MIME type: $detected for file: $filename")
+    logger.debug(s"FileUtils.detectFileType: Tika detected MIME type: $detected for file: $filename")
     detected match {
       case mime if mime.startsWith("image/") => 
         if (mime.contains("png")) "png"
@@ -24,12 +25,18 @@ object FileUtils {
           else "image"
         }
       case mime if mime.contains("pdf") => "pdf"
-      case _ => "other"
+      case _ => 
+        // Fallback to extension if Tika is too generic or incorrect
+        val lowerFilename = filename.toLowerCase
+        if (lowerFilename.endsWith(".pdf")) "pdf"
+        else if (lowerFilename.endsWith(".png")) "png"
+        else if (lowerFilename.endsWith(".jpg") || lowerFilename.endsWith(".jpeg")) "jpeg"
+        else "other"
     }
   }
   
-  def hasImages(bytes: Array[Byte], fileType: String): IO[Boolean] = IO {
-    println(s"[DEBUG] FileUtils.hasImages: Checking fileType: $fileType")
+  def hasImages(bytes: Array[Byte], fileType: String): Boolean = {
+    logger.debug(s"FileUtils.hasImages: Checking fileType: $fileType")
     fileType match {
       case "png" | "jpeg" | "jpg" | "image" => true  // Added "image" as fallback
       case "pdf" => checkPdfForImages(bytes)
@@ -61,7 +68,7 @@ object FileUtils {
     }
   }
   
-  def extractTextContent(bytes: Array[Byte], fileType: String): IO[String] = IO {
+  def extractTextContent(bytes: Array[Byte], fileType: String): String = {
     fileType match {
       case "pdf" => extractPdfText(bytes)
       case _ => s"[Binary file of type: $fileType, size: ${bytes.length} bytes]"

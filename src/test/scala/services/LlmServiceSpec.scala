@@ -1,13 +1,16 @@
 package services
 
-import org.scalatest.flatspec.AsyncFlatSpec
+import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
-import cats.effect.testing.scalatest.AsyncIOSpec
 import config.AppConfig
 import io.circe.parser._
 import io.circe.generic.auto._
+import scala.util.{Try, Success, Failure}
 
-class LlmServiceSpec extends AsyncFlatSpec with Matchers with AsyncIOSpec {
+// Define test case classes locally to avoid import issues
+case class CategoryResult(category: String, confidence_score: Double, reasoning: String)
+
+class LlmServiceSpec extends AnyFlatSpec with Matchers {
 
   val mockConfig = AppConfig(openRouterApiKey = Some("test-api-key"))
   val llmService = new LlmService(mockConfig)
@@ -70,16 +73,17 @@ class LlmServiceSpec extends AsyncFlatSpec with Matchers with AsyncIOSpec {
       
       parse(cleaned).isRight shouldBe true
     }
-    succeed
   }
 
   "LlmService error handling" should "handle missing API key gracefully" in {
     val noKeyConfig = AppConfig(openRouterApiKey = None)
     val noKeyService = new LlmService(noKeyConfig)
     
-    noKeyService.categorizeDocument("test content", "pdf", false).attempt.asserting { result =>
-      result.isLeft shouldBe true
-      result.left.get.getMessage should include("OPENROUTER_API_KEY")
+    val result = Try {
+      noKeyService.categorizeDocument("test content", "pdf", false)
     }
+    
+    result shouldBe a[Failure[_]]
+    result.failed.get.getMessage should include("OPENROUTER_API_KEY")
   }
 }

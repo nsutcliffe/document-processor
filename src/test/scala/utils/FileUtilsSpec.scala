@@ -1,12 +1,10 @@
 package utils
 
-import org.scalatest.flatspec.AsyncFlatSpec
+import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
-import cats.effect.testing.scalatest.AsyncIOSpec
-import cats.effect.IO
 import java.nio.charset.StandardCharsets
 
-class FileUtilsSpec extends AsyncFlatSpec with Matchers with AsyncIOSpec {
+class FileUtilsSpec extends AnyFlatSpec with Matchers {
 
   "FileUtils.detectFileType" should "correctly identify PDF files" in {
     val pdfHeader = Array[Byte](0x25, 0x50, 0x44, 0x46, 0x2D) // %PDF-
@@ -34,26 +32,26 @@ class FileUtilsSpec extends AsyncFlatSpec with Matchers with AsyncIOSpec {
 
   "FileUtils.hasImages" should "return true for image files" in {
     val imageBytes = Array[Byte](0x89.toByte, 0x50, 0x4E, 0x47)
-    FileUtils.hasImages(imageBytes, "png").asserting(_ shouldBe true)
+    val result = FileUtils.hasImages(imageBytes, "png")
+    result shouldBe true
   }
 
   it should "return false for non-image files" in {
     val textBytes = "hello world".getBytes(StandardCharsets.UTF_8)
-    FileUtils.hasImages(textBytes, "other").asserting(_ shouldBe false)
+    val result = FileUtils.hasImages(textBytes, "other")
+    result shouldBe false
   }
 
   "FileUtils.extractTextContent" should "handle PDF text extraction gracefully" in {
     val invalidPdfBytes = "not a real pdf".getBytes(StandardCharsets.UTF_8)
-    FileUtils.extractTextContent(invalidPdfBytes, "pdf").asserting { result =>
-      result should include("PDF text extraction failed")
-    }
+    val result = FileUtils.extractTextContent(invalidPdfBytes, "pdf")
+    result should include("PDF text extraction failed")
   }
 
   it should "return binary file description for non-PDF files" in {
     val imageBytes = Array[Byte](0x89.toByte, 0x50, 0x4E, 0x47)
-    FileUtils.extractTextContent(imageBytes, "png").asserting { result =>
-      result should include("Binary file of type: png")
-      result should include(s"size: ${imageBytes.length} bytes")
-    }
+    val result = FileUtils.extractTextContent(imageBytes, "png")
+    result should include("Binary file of type: png")
+    result should include(s"size: ${imageBytes.length} bytes")
   }
 }
