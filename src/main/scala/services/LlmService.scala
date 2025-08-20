@@ -1,18 +1,13 @@
 package services
 
-import cats.effect.{IO, Resource}
-import cats.implicits._
 import io.circe.generic.semiauto._
-import org.http4s._
-import org.http4s.client._
-import org.http4s.ember.client._
-import org.http4s.circe._
 import io.circe._
 import io.circe.parser._
 import io.circe.syntax._
 import config.AppConfig
-import java.util.UUID
 import java.util.Base64
+import org.slf4j.LoggerFactory
+import scala.util.{Try, Success, Failure}
 
 final case class OpenRouterRequest(
   model: String,
@@ -84,19 +79,26 @@ object TableResult {
 
 class LlmService(config: AppConfig) {
   
+  private val logger = LoggerFactory.getLogger(getClass)
+  
+  // JSON encoders and decoders
   implicit val imageUrlEncoder: Encoder[ImageUrl] = Encoder.instance { imageUrl =>
-    val fields = List(
-      "url" -> Json.fromString(imageUrl.url)
-    ) ++ imageUrl.detail.map(d => "detail" -> Json.fromString(d)).toList
+    val fields = List("url" -> Json.fromString(imageUrl.url)) ++ 
+                 imageUrl.detail.map(d => "detail" -> Json.fromString(d)).toList
     Json.obj(fields: _*)
   }
+  
+  implicit val imageUrlDecoder: Decoder[ImageUrl] = deriveDecoder[ImageUrl]
+  
   implicit val messageContentEncoder: Encoder[MessageContent] = Encoder.instance { content =>
-    val fields = List(
-      "type" -> Json.fromString(content.`type`)
-    ) ++ content.text.map(t => "text" -> Json.fromString(t)).toList ++
-         content.image_url.map(u => "image_url" -> u.asJson).toList
+    val fields = List("type" -> Json.fromString(content.`type`)) ++ 
+                 content.text.map(t => "text" -> Json.fromString(t)).toList ++
+                 content.image_url.map(u => "image_url" -> u.asJson).toList
     Json.obj(fields: _*)
   }
+  
+  implicit val messageContentDecoder: Decoder[MessageContent] = deriveDecoder[MessageContent]
+  
   implicit val messageEncoder: Encoder[OpenRouterMessage] = Encoder.instance { msg =>
     Json.obj(
       "role" -> Json.fromString(msg.role),
@@ -106,9 +108,10 @@ class LlmService(config: AppConfig) {
       })
     )
   }
-  implicit val requestEncoder: Encoder[OpenRouterRequest] = Encoder.forProduct2("model", "messages")(r => (r.model, r.messages))
-  implicit val imageUrlDecoder: Decoder[ImageUrl] = Decoder.forProduct2("url", "detail")(ImageUrl.apply)
-  implicit val messageContentDecoder: Decoder[MessageContent] = Decoder.forProduct3("type", "text", "image_url")(MessageContent.apply)
+  
+  implicit val requestEncoder: Encoder[OpenRouterRequest] = deriveEncoder[OpenRouterRequest]
+  implicit val responseDecoder: Decoder[OpenRouterResponse] = deriveDecoder[OpenRouterResponse]
+  implicit val choiceDecoder: Decoder[OpenRouterChoice] = deriveDecoder[OpenRouterChoice]
   implicit val messageDecoder: Decoder[OpenRouterMessage] = Decoder.instance { cursor =>
     for {
       role <- cursor.get[String]("role")
@@ -117,12 +120,6 @@ class LlmService(config: AppConfig) {
       )
     } yield OpenRouterMessage(role, content)
   }
-  implicit val choiceDecoder: Decoder[OpenRouterChoice] = Decoder.forProduct1("message")(OpenRouterChoice.apply)
-  implicit val responseDecoder: Decoder[OpenRouterResponse] = Decoder.forProduct1("choices")(OpenRouterResponse.apply)
-  
-  // Decoders are now in companion objects
-
-  private val clientResource: Resource[IO, Client[IO]] = EmberClientBuilder.default[IO].build
 
   def selectModel(fileType: String, hasImages: Boolean): String = {
     (fileType.toLowerCase, hasImages) match {
@@ -132,7 +129,7 @@ class LlmService(config: AppConfig) {
     }
   }
 
-  def categorizeDocument(content: String, fileType: String, hasImages: Boolean): IO[CategoryResult] = {
+  def categorizeDocument(content: String, fileType: String, hasImages: Boolean): CategoryResult = {
     val model = selectModel(fileType, hasImages)
     val prompt = """You are a document classification system. Classify the document into:
 - invoice
@@ -148,24 +145,21 @@ Return ONLY valid JSON exactly matching:
   "reasoning": "Brief explanation"
 }"""
 
-    callOpenRouter(model, prompt, content).flatMap { response =>
-      // Debug logging
-      IO(println(s"[DEBUG] Categorization response from $model: ${response.take(200)}...")) *>
-      parseJson[CategoryResult](response).fold(
-        error => {
-          IO(println(s"[DEBUG] Failed to parse categorization response: $error")) *>
-          IO(println(s"[DEBUG] Raw response: $response")) *>
-          IO.raiseError(new RuntimeException(s"Failed to parse categorization: $error"))
-        },
-        result => {
-          IO(println(s"[DEBUG] Successfully parsed categorization: ${result.category} (${result.confidence_score})")) *>
-          IO.pure(result)
-        }
-      )
+    val response = callOpenRouter(model, prompt, content)
+    logger.debug(s"Categorization response from $model: ${response.take(200)}...")
+    
+    parseJson[CategoryResult](response) match {
+      case Right(result) =>
+        logger.debug(s"Successfully parsed categorization: ${result.category} (${result.confidence_score})")
+        result
+      case Left(error) =>
+        logger.error(s"Failed to parse categorization response: $error")
+        logger.debug(s"Raw response: $response")
+        throw new RuntimeException(s"Failed to parse categorization: $error")
     }
   }
 
-  def extractContent(content: String, fileType: String, hasImages: Boolean): IO[ExtractionResult] = {
+  def extractContent(content: String, fileType: String, hasImages: Boolean): ExtractionResult = {
     val model = selectModel(fileType, hasImages)
     val prompt = """Extract key information. Look for:
 - Names (people, companies, organizations)
@@ -178,13 +172,6 @@ Return ONLY valid JSON exactly matching:
 - Dates
 - Tables (if present)
 
-For each table, output:
-{
-  "table_name": "string",
-  "headers": ["col1", "col2", ...],
-  "rows": [["r1c1", "r1c2", ...], ["r2c1", "r2c2", ...]]
-}
-
 Return ONLY JSON exactly matching:
 {
   "entities": [ {"type": "name|place|phone|ip_address|account_id|payment_method|merchant", "value": "...", "confidence": 0.0-1.0 }, ...],
@@ -192,25 +179,22 @@ Return ONLY JSON exactly matching:
   "tables": [ { "table_name": "...", "headers": [...], "rows": [[...], ...] } ]
 }"""
 
-    callOpenRouter(model, prompt, content).flatMap { response =>
-      // Debug logging
-      IO(println(s"[DEBUG] Extraction response from $model: ${response.take(200)}...")) *>
-      parseJson[ExtractionResult](response).fold(
-        error => {
-          IO(println(s"[DEBUG] Failed to parse extraction response: $error")) *>
-          IO(println(s"[DEBUG] Raw response: $response")) *>
-          IO.raiseError(new RuntimeException(s"Failed to parse extraction: $error"))
-        },
-        result => {
-          IO(println(s"[DEBUG] Successfully parsed extraction: ${result.entities.size} entities, ${result.dates.size} dates, ${result.tables.size} tables")) *>
-          IO.pure(result)
-        }
-      )
+    val response = callOpenRouter(model, prompt, content)
+    logger.debug(s"Extraction response from $model: ${response.take(200)}...")
+    
+    parseJson[ExtractionResult](response) match {
+      case Right(result) =>
+        logger.debug(s"Successfully parsed extraction: ${result.entities.size} entities, ${result.dates.size} dates, ${result.tables.size} tables")
+        result
+      case Left(error) =>
+        logger.error(s"Failed to parse extraction response: $error")
+        logger.debug(s"Raw response: $response")
+        throw new RuntimeException(s"Failed to parse extraction: $error")
     }
   }
 
   // Overloaded methods for handling images with raw bytes
-  def categorizeDocument(imageBytes: Array[Byte], fileType: String): IO[CategoryResult] = {
+  def categorizeDocument(imageBytes: Array[Byte], fileType: String): CategoryResult = {
     val model = selectModel(fileType, hasImages = true)
     val prompt = """You are a document classification AI. Analyze the uploaded image and classify it into one of these categories:
 - invoice
@@ -228,24 +212,22 @@ IMPORTANT: You must respond with ONLY valid JSON in this exact format:
 
 Do not include any other text, explanations, or apologies. Only return the JSON object."""
 
-    IO(println(s"[DEBUG] categorizeDocument: Using model $model for $fileType image (${imageBytes.length} bytes)")) *>
-    callOpenRouterWithImage(model, prompt, imageBytes, fileType).flatMap { response =>
-      IO(println(s"[DEBUG] Categorization response from $model: ${response.take(200)}...")) *>
-      parseJson[CategoryResult](response).fold(
-        error => {
-          IO(println(s"[DEBUG] Failed to parse categorization response: $error")) *>
-          IO(println(s"[DEBUG] Raw response: $response")) *>
-          IO.raiseError(new RuntimeException(s"Failed to parse categorization: $error"))
-        },
-        result => {
-          IO(println(s"[DEBUG] Successfully parsed categorization: ${result.category} (${result.confidence_score})")) *>
-          IO.pure(result)
-        }
-      )
+    logger.debug(s"categorizeDocument: Using model $model for $fileType image (${imageBytes.length} bytes)")
+    val response = callOpenRouterWithImage(model, prompt, imageBytes, fileType)
+    logger.debug(s"Categorization response from $model: ${response.take(200)}...")
+    
+    parseJson[CategoryResult](response) match {
+      case Right(result) =>
+        logger.debug(s"Successfully parsed categorization: ${result.category} (${result.confidence_score})")
+        result
+      case Left(error) =>
+        logger.error(s"Failed to parse categorization response: $error")
+        logger.debug(s"Raw response: $response")
+        throw new RuntimeException(s"Failed to parse categorization: $error")
     }
   }
 
-  def extractContent(imageBytes: Array[Byte], fileType: String): IO[ExtractionResult] = {
+  def extractContent(imageBytes: Array[Byte], fileType: String): ExtractionResult = {
     val model = selectModel(fileType, hasImages = true)
     val prompt = """You are a data extraction AI. Analyze the uploaded image and extract key information:
 
@@ -269,26 +251,24 @@ IMPORTANT: You must respond with ONLY valid JSON in this exact format:
 
 Do not include any other text, explanations, or apologies. Only return the JSON object. If you cannot process the image, return empty arrays for entities, dates, and tables."""
 
-    IO(println(s"[DEBUG] extractContent: Using model $model for $fileType image (${imageBytes.length} bytes)")) *>
-    callOpenRouterWithImage(model, prompt, imageBytes, fileType).flatMap { response =>
-      IO(println(s"[DEBUG] Extraction response from $model: ${response.take(200)}...")) *>
-      parseJson[ExtractionResult](response).fold(
-        error => {
-          IO(println(s"[DEBUG] Failed to parse extraction response: $error")) *>
-          IO(println(s"[DEBUG] Raw response: $response")) *>
-          IO.raiseError(new RuntimeException(s"Failed to parse extraction: $error"))
-        },
-        result => {
-          IO(println(s"[DEBUG] Successfully parsed extraction: ${result.entities.size} entities, ${result.dates.size} dates, ${result.tables.size} tables")) *>
-          IO.pure(result)
-        }
-      )
+    logger.debug(s"extractContent: Using model $model for $fileType image (${imageBytes.length} bytes)")
+    val response = callOpenRouterWithImage(model, prompt, imageBytes, fileType)
+    logger.debug(s"Extraction response from $model: ${response.take(200)}...")
+    
+    parseJson[ExtractionResult](response) match {
+      case Right(result) =>
+        logger.debug(s"Successfully parsed extraction: ${result.entities.size} entities, ${result.dates.size} dates, ${result.tables.size} tables")
+        result
+      case Left(error) =>
+        logger.error(s"Failed to parse extraction response: $error")
+        logger.debug(s"Raw response: $response")
+        throw new RuntimeException(s"Failed to parse extraction: $error")
     }
   }
 
-  private def callOpenRouterWithImage(model: String, systemPrompt: String, imageBytes: Array[Byte], fileType: String): IO[String] = {
+  private def callOpenRouterWithImage(model: String, systemPrompt: String, imageBytes: Array[Byte], fileType: String): String = {
     config.openRouterApiKey match {
-      case None => IO.raiseError(new RuntimeException("OPENROUTER_API_KEY environment variable not set"))
+      case None => throw new RuntimeException("OPENROUTER_API_KEY environment variable not set")
       case Some(apiKey) =>
         val base64Image = Base64.getEncoder.encodeToString(imageBytes)
         val mimeType = fileType match {
@@ -311,39 +291,13 @@ Do not include any other text, explanations, or apologies. Only return the JSON 
           )
         )
 
-        clientResource.use { client =>
-          val uri = Uri.unsafeFromString("https://openrouter.ai/api/v1/chat/completions")
-          val httpRequest = Request[IO](
-            method = Method.POST,
-            uri = uri,
-            headers = Headers(
-              Header.Raw(org.typelevel.ci.CIString("Authorization"), s"Bearer $apiKey"),
-              Header.Raw(org.typelevel.ci.CIString("Content-Type"), "application/json"),
-              Header.Raw(org.typelevel.ci.CIString("HTTP-Referer"), "http://localhost:8080"),
-              Header.Raw(org.typelevel.ci.CIString("X-Title"), "Tunic Pay Document Processor")
-            )
-          ).withEntity(request.asJson)
-
-          retryWithBackoff(client.expect[String](httpRequest), maxRetries = 3)
-        }.flatMap { responseBody =>
-          parseJson[OpenRouterResponse](responseBody) match {
-            case Right(response) if response.choices.nonEmpty =>
-              IO.pure(response.choices.head.message.content match {
-                case Left(text) => text
-                case Right(_) => "No text content in response"
-              })
-            case Right(_) =>
-              IO.raiseError(new RuntimeException("Empty response from OpenRouter"))
-            case Left(error) =>
-              IO.raiseError(new RuntimeException(s"Failed to parse OpenRouter response: $error"))
-          }
-        }
+        callOpenRouterAPI(request, apiKey)
     }
   }
 
-  private def callOpenRouter(model: String, systemPrompt: String, userContent: String): IO[String] = {
+  private def callOpenRouter(model: String, systemPrompt: String, userContent: String): String = {
     config.openRouterApiKey match {
-      case None => IO.raiseError(new RuntimeException("OPENROUTER_API_KEY environment variable not set"))
+      case None => throw new RuntimeException("OPENROUTER_API_KEY environment variable not set")
       case Some(apiKey) =>
         val request = OpenRouterRequest(
           model = model,
@@ -353,52 +307,64 @@ Do not include any other text, explanations, or apologies. Only return the JSON 
           )
         )
 
-        clientResource.use { client =>
-          val uri = Uri.unsafeFromString("https://openrouter.ai/api/v1/chat/completions")
-          val httpRequest = Request[IO](
-            method = Method.POST,
-            uri = uri,
-            headers = Headers(
-              Header.Raw(org.typelevel.ci.CIString("Authorization"), s"Bearer $apiKey"),
-              Header.Raw(org.typelevel.ci.CIString("Content-Type"), "application/json"),
-              Header.Raw(org.typelevel.ci.CIString("HTTP-Referer"), "http://localhost:8080"),
-              Header.Raw(org.typelevel.ci.CIString("X-Title"), "Tunic Pay Document Processor")
-            )
-          ).withEntity(request.asJson)
-
-          retryWithBackoff(client.expect[String](httpRequest), maxRetries = 3)
-        }.flatMap { responseBody =>
-          parseJson[OpenRouterResponse](responseBody) match {
-            case Right(response) if response.choices.nonEmpty =>
-              IO.pure(response.choices.head.message.content match {
-                case Left(text) => text
-                case Right(_) => "No text content in response"
-              })
-            case Right(_) =>
-              IO.raiseError(new RuntimeException("Empty response from OpenRouter"))
-            case Left(error) =>
-              IO.raiseError(new RuntimeException(s"Failed to parse OpenRouter response: $error"))
-          }
-        }
+        callOpenRouterAPI(request, apiKey)
     }
   }
 
-  private def retryWithBackoff[A](operation: IO[A], maxRetries: Int, currentRetry: Int = 0): IO[A] = {
-    operation.handleErrorWith { error =>
-      if (currentRetry < maxRetries && shouldRetry(error)) {
-        IO.sleep(scala.concurrent.duration.Duration.fromNanos(1000000000L)) >> // 1 second delay
-          retryWithBackoff(operation, maxRetries, currentRetry + 1)
-      } else {
-        IO.raiseError(error)
+  private def callOpenRouterAPI(request: OpenRouterRequest, apiKey: String): String = {
+    val requestBody = request.asJson.noSpaces
+    
+    def attemptRequest(attempt: Int): String = {
+      Try {
+        val response = requests.post(
+          "https://openrouter.ai/api/v1/chat/completions",
+          data = requestBody,
+          headers = Map(
+            "Authorization" -> s"Bearer $apiKey",
+            "Content-Type" -> "application/json",
+            "HTTP-Referer" -> "http://localhost:8080",
+            "X-Title" -> "Tunic Pay Document Processor"
+          ),
+          readTimeout = 45000,
+          connectTimeout = 10000
+        )
+        
+        if (response.statusCode == 200) {
+          response.text()
+        } else {
+          throw new RuntimeException(s"HTTP ${response.statusCode}: ${response.text()}")
+        }
+      } match {
+        case Success(responseBody) =>
+          parseJson[OpenRouterResponse](responseBody) match {
+            case Right(response) if response.choices.nonEmpty =>
+              response.choices.head.message.content match {
+                case Left(text) => text
+                case Right(_) => throw new RuntimeException("No text content in response")
+              }
+            case Right(_) =>
+              throw new RuntimeException("Empty response from OpenRouter")
+            case Left(error) =>
+              throw new RuntimeException(s"Failed to parse OpenRouter response: $error")
+          }
+        case Failure(error) =>
+          if (attempt < 3 && shouldRetry(error)) {
+            logger.warn(s"Request failed (attempt $attempt), retrying in 1 second: ${error.getMessage}")
+            Thread.sleep(1000)
+            attemptRequest(attempt + 1)
+          } else {
+            throw error
+          }
       }
     }
+    
+    attemptRequest(1)
   }
 
   private def shouldRetry(error: Throwable): Boolean = {
     error.getMessage match {
       case msg if msg.contains("400") => 
-        // Don't retry 400 errors, but log them for debugging
-        println(s"[DEBUG] 400 Bad Request error (not retrying): $msg")
+        logger.debug(s"400 Bad Request error (not retrying): $msg")
         false
       case msg if msg.contains("429") => true  // Rate limit
       case msg if msg.contains("408") => true  // Timeout

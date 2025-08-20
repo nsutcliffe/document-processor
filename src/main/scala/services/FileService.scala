@@ -1,32 +1,39 @@
 package services
 
-import cats.effect.IO
-import org.http4s.Headers
 import java.util.zip.CRC32
-import java.util.UUID
-import fs2.Stream
+import org.slf4j.LoggerFactory
 
 final case class StoredFileMeta(id: String, filename: String, size: Long, contentType: String, checksum: String)
-final case class FileBytes(filename: String, contentType: String, content: Stream[IO, Byte])
+final case class FileBytes(filename: String, contentType: String, content: Array[Byte])
 
 class FileService {
-  // TODO: replace with DB. For bootstrap, keep in-memory map for content; DB for metadata in later step.
+  
+  private val logger = LoggerFactory.getLogger(getClass)
+  
+  // In-memory storage for file content (for simplicity in this prototype)
   private val contentStore = scala.collection.concurrent.TrieMap.empty[String, Array[Byte]]
+  private val metaStore = scala.collection.concurrent.TrieMap.empty[String, StoredFileMeta]
 
-  def storeUploadedFile(filename: String, bytes: Array[Byte], headers: Headers): IO[StoredFileMeta] = IO {
+  def storeUploadedFile(filename: String, bytes: Array[Byte], contentType: String): StoredFileMeta = {
     val checksum = computeCrc32(bytes)
-    val id = s"${filename.hashCode.abs}-$checksum" // Use deterministic ID based on filename + content
-    val ct = headers.get[org.http4s.headers.`Content-Type`]
-      .map(h => h.mediaType.toString)
-      .getOrElse("application/octet-stream")
+    val id = s"${filename.hashCode.abs}-$checksum" // Deterministic ID based on filename + content
+    
+    logger.debug(s"Storing file: $filename -> $id (${bytes.length} bytes, $contentType)")
+    
     contentStore.put(id, bytes)
-    StoredFileMeta(id, filename, bytes.length.toLong, ct, checksum)
+    val meta = StoredFileMeta(id, filename, bytes.length.toLong, contentType, checksum)
+    metaStore.put(id, meta)
+    
+    meta
   }
 
-  def fetchFile(fileId: String): IO[Option[FileBytes]] = IO {
-    contentStore.get(fileId).map { b =>
-      FileBytes(filename = s"file-$fileId", contentType = "application/octet-stream", content = Stream.emits(b).covary[IO])
-    }
+  def fetchFile(fileId: String): Option[FileBytes] = {
+    logger.debug(s"Fetching file: $fileId")
+    
+    for {
+      content <- contentStore.get(fileId)
+      meta <- metaStore.get(fileId)
+    } yield FileBytes(meta.filename, meta.contentType, content)
   }
 
   private def computeCrc32(bytes: Array[Byte]): String = {
@@ -35,5 +42,3 @@ class FileService {
     java.lang.Long.toHexString(crc.getValue)
   }
 }
-
-

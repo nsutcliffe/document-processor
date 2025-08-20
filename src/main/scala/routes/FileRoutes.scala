@@ -1,53 +1,142 @@
 package routes
 
-import cats.effect._
-import cats.implicits._
-import org.http4s._
-import org.http4s.dsl.io._
-import org.http4s.circe._
-import org.http4s.multipart._
-import io.circe.syntax._
-import io.circe.Json
+import org.scalatra.ScalatraServlet
+import org.scalatra.servlet.{FileUploadSupport, MultipartConfig}
+import org.slf4j.LoggerFactory
 import services.{FileService, ExtractionService, LlmService, DatabaseService}
 import models.api._
 import models.api.ApiModels._
-import org.typelevel.ci.CIString
 import config.AppConfig
+import io.circe.syntax._
+import io.circe.Json
+import javax.servlet.http.HttpServletRequest
+import java.io.InputStream
+import scala.util.{Try, Success, Failure}
 
-final class FileRoutes()(implicit cs: Concurrent[IO]) {
-  private val config = AppConfig.default
-  private val fileService = new FileService
-  private val llmService = LlmService(config)
-  private val dbService = DatabaseService.instance
-  private val extractionService = new ExtractionService(llmService, dbService)
-
-  private val uploadRoute: HttpRoutes[IO] = HttpRoutes.of[IO] {
-    case req @ POST -> Root / "api" / "files" / "upload" =>
-      req.decode[Multipart[IO]] { m =>
-        val maybeFilePart = m.parts.find(_.name.contains("file"))
-        maybeFilePart match {
-          case Some(part) =>
-            (for {
-              bytes <- part.body.compile.to(Array)
-              meta  <- fileService.storeUploadedFile(part.filename.getOrElse("uploaded"), bytes, part.headers)
-              result <- extractionService.processFile(meta, bytes)
-              resp   <- Ok(result.asJson)
-            } yield resp).handleErrorWith { error =>
-              // Log the error and return user-friendly message
-              IO(println(s"Upload error: ${error.getMessage}")) *>
-              BadRequest(Json.obj(
-                "error" -> Json.fromBoolean(true),
-                "message" -> Json.fromString(getUserFriendlyErrorMessage(error))
-              ))
-            }
-          case None => BadRequest(Json.obj(
+class FileRoutes(
+  fileService: FileService,
+  llmService: LlmService,
+  dbService: DatabaseService,
+  extractionService: ExtractionService
+) extends ScalatraServlet with FileUploadSupport {
+  
+  private val logger = LoggerFactory.getLogger(getClass)
+  
+  // Configure multipart support
+  configureMultipartHandling(MultipartConfig(
+    maxFileSize = Some(50 * 1024 * 1024), // 50MB max file size
+    fileSizeThreshold = Some(1024 * 1024)  // 1MB threshold
+  ))
+  
+  // Enable CORS for frontend
+  before() {
+    response.setHeader("Access-Control-Allow-Origin", "*")
+    response.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+    response.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization")
+  }
+  
+  // Handle OPTIONS requests
+  options("/*") {
+    response.setHeader("Access-Control-Allow-Origin", "*")
+    response.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+    response.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization")
+  }
+  
+  // Test route to verify mounting
+  get("/test") {
+    logger.info("=== TEST ROUTE HIT ===")
+    contentType = "text/plain"
+    "FileRoutes is working!"
+  }
+  
+  // Upload endpoint
+  post("/files/upload") {
+    logger.info("=== UPLOAD ENDPOINT HIT ===")
+    contentType = "application/json"
+    
+    Try {
+      fileParams.get("file") match {
+        case Some(file) =>
+          logger.info(s"Processing upload: ${file.name} (${file.size} bytes)")
+          
+          val filename = file.name
+          val bytes = file.get()
+          val contentType = file.contentType.getOrElse("application/octet-stream")
+          
+          // Store file metadata
+          val meta = fileService.storeUploadedFile(filename, bytes, contentType)
+          
+          // Process with LLM
+          val result = extractionService.processFile(meta, bytes)
+          
+          logger.info(s"Upload processed successfully: $filename -> ${result.category}")
+          result.asJson.noSpaces
+          
+        case None =>
+          val error = Json.obj(
             "error" -> Json.fromBoolean(true),
             "message" -> Json.fromString("No file was uploaded. Please select a file and try again.")
-          ))
-        }
+          )
+          halt(400, error.noSpaces)
       }
+    } match {
+      case Success(result) => result
+      case Failure(error) =>
+        logger.error(s"Upload failed: ${error.getMessage}", error)
+        val friendlyMessage = getUserFriendlyErrorMessage(error)
+        val errorResponse = Json.obj(
+          "error" -> Json.fromBoolean(true),
+          "message" -> Json.fromString(friendlyMessage)
+        )
+        halt(400, errorResponse.noSpaces)
+    }
   }
-
+  
+  // Get file result endpoint
+  get("/files/:fileId") {
+    contentType = "application/json"
+    
+    val fileId = params("fileId")
+    
+    Try {
+      extractionService.fetchResult(fileId) match {
+        case Some(result) => 
+          logger.debug(s"Retrieved result for file: $fileId")
+          result.asJson.noSpaces
+        case None =>
+          val error = Json.obj("message" -> Json.fromString("Not found"))
+          halt(404, error.noSpaces)
+      }
+    } match {
+      case Success(result) => result
+      case Failure(error) =>
+        logger.error(s"Failed to get file result: ${error.getMessage}", error)
+        halt(500, Json.obj("error" -> Json.fromString(error.getMessage)).noSpaces)
+    }
+  }
+  
+  // Download file endpoint
+  get("/files/:fileId/download") {
+    val fileId = params("fileId")
+    
+    Try {
+      fileService.fetchFile(fileId) match {
+        case Some(file) =>
+          logger.debug(s"Serving download for file: $fileId")
+          response.setHeader("Content-Type", file.contentType)
+          response.setHeader("Content-Disposition", s"attachment; filename=\"${file.filename}\"")
+          file.content
+        case None =>
+          halt(404, "File not found")
+      }
+    } match {
+      case Success(result) => result
+      case Failure(error) =>
+        logger.error(s"Failed to download file: ${error.getMessage}", error)
+        halt(500, s"Download failed: ${error.getMessage}")
+    }
+  }
+  
   def getUserFriendlyErrorMessage(error: Throwable): String = {
     error.getMessage match {
       case msg if msg.contains("OPENROUTER_API_KEY") => 
@@ -68,28 +157,4 @@ final class FileRoutes()(implicit cs: Concurrent[IO]) {
         s"Unable to process this document: ${error.getMessage.take(100)}..."
     }
   }
-
-  private val getRoute: HttpRoutes[IO] = HttpRoutes.of[IO] {
-    case GET -> Root / "api" / "files" / fileId =>
-      for {
-        res <- extractionService.fetchResult(fileId)
-        resp <- res.fold(NotFound(Json.obj("message" -> Json.fromString("Not found"))))(r => Ok(r.asJson))
-      } yield resp
-  }
-
-  private val downloadRoute: HttpRoutes[IO] = HttpRoutes.of[IO] {
-    case GET -> Root / "api" / "files" / fileId / "download" =>
-      fileService.fetchFile(fileId).flatMap {
-        case None => NotFound()
-        case Some(f) =>
-          Ok(f.content).map(_.putHeaders(
-            Header.Raw(CIString("Content-Type"), f.contentType),
-            Header.Raw(CIString("Content-Disposition"), s"attachment; filename=\"${f.filename}\"")
-          ))
-      }
-  }
-
-  val routes: HttpRoutes[IO] = uploadRoute <+> getRoute <+> downloadRoute
 }
-
-
