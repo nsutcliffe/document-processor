@@ -270,17 +270,15 @@ Do not include any other text, explanations, or apologies. Only return the JSON 
     config.openRouterApiKey match {
       case None => throw new RuntimeException("OPENROUTER_API_KEY environment variable not set")
       case Some(apiKey) =>
-        val base64Image = Base64.getEncoder.encodeToString(imageBytes)
-        val mimeType = fileType match {
-          case "png" => "image/png"
-          case "jpeg" | "jpg" => "image/jpeg"
-          case _ => "image/jpeg" // default
-        }
+        // Preprocess image to reduce provider errors
+        val (preparedBytes, preparedMime, detailHint) = utils.ImageUtils.prepareImageForVision(imageBytes, fileType)
+        val base64Image = Base64.getEncoder.encodeToString(preparedBytes)
+        val mimeType = preparedMime
         val dataUrl = s"data:$mimeType;base64,$base64Image"
         
         val userMessage = OpenRouterMessage("user", Right(List(
           MessageContent("text", Some("Analyze this image and follow the system instructions exactly."), None),
-          MessageContent("image_url", None, Some(ImageUrl(dataUrl)))
+          MessageContent("image_url", None, Some(ImageUrl(dataUrl, Some(detailHint))))
         )))
         
         val request = OpenRouterRequest(

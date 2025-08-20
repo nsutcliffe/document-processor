@@ -58,7 +58,26 @@ class ExtractionService(llmService: LlmService, dbService: DatabaseService) {
       // Process with LLM (handle images vs text differently)
       val result = if (fileType == "png" || fileType == "jpeg" || fileType == "jpg" || fileType == "image") {
         logger.debug(s"Using IMAGE processing flow for $fileType file")
-        processWithLLMImage(meta.id, bytes, fileType)
+        try {
+          processWithLLMImage(meta.id, bytes, fileType)
+        } catch {
+          case e: Throwable =>
+            logger.warn(s"Vision processing failed, falling back to safe result: ${e.getMessage}")
+            UploadResponse(
+              fileId = meta.id,
+              filename = meta.filename,
+              fileSize = meta.size,
+              fileType = meta.contentType,
+              category = "other",
+              confidenceScore = 0.0,
+              entities = List.empty,
+              dates = List.empty,
+              tables = List.empty,
+              downloadUrl = s"/api/files/${meta.id}/download",
+              error = Some(true),
+              message = Some("AI service error for this image. Please try again shortly or use a smaller image.")
+            )
+        }
       } else {
         logger.debug(s"Using TEXT processing flow for $fileType file")
         // Extract text content for non-image files
