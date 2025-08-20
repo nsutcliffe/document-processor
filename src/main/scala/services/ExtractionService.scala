@@ -118,7 +118,9 @@ class ExtractionService(llmService: LlmService, dbService: DatabaseService) {
       entities = List.empty,
       dates = List.empty,
       tables = List.empty,
-      downloadUrl = s"/api/files/${meta.id}/download"
+      downloadUrl = s"/api/files/${meta.id}/download",
+      error = Some(true),
+      message = Some(message)
     )
   }
 

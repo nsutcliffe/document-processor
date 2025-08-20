@@ -16,7 +16,9 @@ final case class UploadResponse(
   entities: List[EntityDto],
   dates: List[String],
   tables: List[TableDto],
-  downloadUrl: String
+  downloadUrl: String,
+  error: Option[Boolean] = None,
+  message: Option[String] = None
 )
 
 object ApiModels {

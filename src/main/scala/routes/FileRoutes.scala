@@ -41,6 +41,17 @@ class FileRoutes(
     response.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
     response.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization")
   }
+
+  // Global JSON error handler
+  error {
+    case e: Throwable =>
+      logger.error("Unhandled error", e)
+      contentType = "application/json"
+      halt(400, Json.obj(
+        "error" -> Json.fromBoolean(true),
+        "message" -> Json.fromString(getUserFriendlyErrorMessage(e))
+      ).noSpaces)
+  }
   
   // Test route to verify mounting
   get("/test") {
@@ -49,6 +60,21 @@ class FileRoutes(
     "FileRoutes is working!"
   }
   
+  // List recent files
+  get("/files") {
+    contentType = "application/json"
+    Try {
+      val files = dbService.listFiles(200)
+      import io.circe.generic.auto._
+      files.asJson.noSpaces
+    } match {
+      case Success(json) => json
+      case Failure(e) =>
+        logger.error("Failed to list files", e)
+        halt(500, Json.obj("error" -> Json.fromString("Failed to list files")))
+    }
+  }
+
   // Upload endpoint
   post("/files/upload") {
     logger.info("=== UPLOAD ENDPOINT HIT ===")
@@ -153,8 +179,12 @@ class FileRoutes(
         "AI service is temporarily unavailable. Please try again later."
       case msg if msg.contains("Unique index or primary key violation") =>
         "This file is already being processed. Please wait for the current processing to complete."
-      case _ => 
-        s"Unable to process this document: ${error.getMessage.take(100)}..."
+      case msg if msg.toLowerCase.contains("missing choices") || msg.toLowerCase.contains("no text content") =>
+        "AI service returned an unexpected format. Please try again in a moment."
+      case msg if msg.toLowerCase.contains("openrouter error") =>
+        "AI service error. Please try again shortly."
+      case _ =>
+        s"Unable to process this document: ${Option(error.getMessage).getOrElse("unknown error").take(120)}"
     }
   }
 }

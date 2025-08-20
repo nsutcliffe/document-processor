@@ -336,16 +336,17 @@ Do not include any other text, explanations, or apologies. Only return the JSON 
         }
       } match {
         case Success(responseBody) =>
-          parseJson[OpenRouterResponse](responseBody) match {
-            case Right(response) if response.choices.nonEmpty =>
-              response.choices.head.message.content match {
-                case Left(text) => text
-                case Right(_) => throw new RuntimeException("No text content in response")
+          // Robust handling: check for error payloads; retry on transient provider errors
+          Try(extractTextOrRaise(responseBody)) match {
+            case Success(text) => text
+            case Failure(err) =>
+              if (attempt < 3 && shouldRetryBodyError(err)) {
+                logger.warn(s"Body parse/provider error (attempt $attempt), retrying in 1 second: ${err.getMessage}")
+                Thread.sleep(1000)
+                attemptRequest(attempt + 1)
+              } else {
+                throw err
               }
-            case Right(_) =>
-              throw new RuntimeException("Empty response from OpenRouter")
-            case Left(error) =>
-              throw new RuntimeException(s"Failed to parse OpenRouter response: $error")
           }
         case Failure(error) =>
           if (attempt < 3 && shouldRetry(error)) {
@@ -359,6 +360,40 @@ Do not include any other text, explanations, or apologies. Only return the JSON 
     }
     
     attemptRequest(1)
+  }
+
+  // Extract assistant text or raise a helpful error if OpenRouter returned an error payload
+  private def extractTextOrRaise(raw: String): String = {
+    parse(raw) match {
+      case Left(_) =>
+        throw new RuntimeException(s"Unexpected response from OpenRouter: ${raw.take(200)}")
+      case Right(json) =>
+        val cur = json.hcursor
+        // If error present, surface it
+        cur.downField("error").focus match {
+          case Some(err) =>
+            val code = err.hcursor.get[String]("code").toOption.getOrElse("unknown_error")
+            val msg  = err.hcursor.get[String]("message").toOption.getOrElse("Unknown error")
+            throw new RuntimeException(s"OpenRouter error ($code): $msg")
+          case None =>
+            // Try normal choices shape
+            cur.downField("choices").as[List[Json]] match {
+              case Right(choices) if choices.nonEmpty =>
+                val contentCur = choices.head.hcursor.downField("message").downField("content")
+                contentCur.as[String].getOrElse(throw new RuntimeException("OpenRouter returned no text content"))
+              case _ =>
+                throw new RuntimeException("Failed to parse OpenRouter response: missing choices")
+            }
+        }
+    }
+  }
+
+  private def shouldRetryBodyError(error: Throwable): Boolean = {
+    val msg = Option(error.getMessage).getOrElse("").toLowerCase
+    msg.contains("provider returned error") ||
+    msg.contains("temporarily unavailable") ||
+    msg.contains("rate limit") ||
+    msg.contains("overloaded")
   }
 
   private def shouldRetry(error: Throwable): Boolean = {

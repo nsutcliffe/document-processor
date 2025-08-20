@@ -32,6 +32,15 @@ class ApiClient:
             return response.json()
         except requests.exceptions.RequestException:
             return None
+
+    def list_files(self) -> Optional[Any]:
+        url = f"{self.base_url}/api/files"
+        try:
+            response = requests.get(url, timeout=30)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException:
+            return None
     
     def download_file(self, file_id: str) -> Optional[bytes]:
         """Download the original file."""

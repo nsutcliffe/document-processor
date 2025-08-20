@@ -67,6 +67,22 @@ def main():
     # Main content area
     api_client = get_api_client()
     
+    # Sidebar: recent files list
+    with st.sidebar:
+        st.header("🗂️ Recent Files")
+        files = api_client.list_files() or []
+        if files:
+            # Build options as "filename (status)"
+            options = {f"{f['filename']} ({f['status']}{' • ' + f['category'] if f.get('category') else ''})": f['id'] for f in files}
+            selection = st.selectbox("Select a file", list(options.keys()))
+            if st.button("Load Selected"):
+                selected_id = options[selection]
+                result = api_client.get_file_result(selected_id) or {"error": True, "message": "Not found"}
+                st.session_state['last_result'] = result
+                st.rerun()
+        else:
+            st.caption("No files yet.")
+
     # File upload section
     file_data = file_upload_component()
     

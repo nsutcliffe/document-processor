@@ -25,6 +25,14 @@ final case class DbExtractionRow(
   modelUsed: String
 )
 
+final case class FileSummary(
+  id: String,
+  filename: String,
+  uploadedAt: Instant,
+  status: String,
+  category: Option[String]
+)
+
 class DatabaseService(useInMemory: Boolean = false) {
   
   private val logger = LoggerFactory.getLogger(getClass)
@@ -173,6 +181,34 @@ class DatabaseService(useInMemory: Boolean = false) {
         modelUsed = rs.string("model_used")
       )
     }.single.apply()
+  }
+
+  def listFiles(limit: Int = 100): List[FileSummary] = {
+    implicit val session: DBSession = ReadOnlyAutoSession
+    sql"""
+      SELECT f.id,
+             f.filename,
+             f.upload_timestamp,
+             f.processing_status,
+             (
+               SELECT e.category
+               FROM extractions e
+               WHERE e.file_id = f.id
+               ORDER BY e.extraction_timestamp DESC
+               LIMIT 1
+             ) AS latest_category
+      FROM files f
+      ORDER BY f.upload_timestamp DESC
+      LIMIT ?
+    """.bind(limit).map { rs =>
+      FileSummary(
+        id = rs.string("id"),
+        filename = rs.string("filename"),
+        uploadedAt = rs.localDateTime("upload_timestamp").atZone(ZoneId.systemDefault()).toInstant,
+        status = rs.string("processing_status"),
+        category = Option(rs.string("latest_category"))
+      )
+    }.list.apply()
   }
 }
 
