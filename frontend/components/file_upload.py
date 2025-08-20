@@ -25,7 +25,7 @@ def file_upload_component() -> Optional[tuple]:
             "File type": uploaded_file.type
         }
         
-        with st.expander("📋 File Details", expanded=False):
+        with st.expander("📋 File Details", expanded=True):
             for key, value in file_details.items():
                 st.write(f"**{key}:** {value}")
         

@@ -87,16 +87,6 @@ def display_results(result: Dict[str, Any]) -> None:
                 else:
                     st.write("Empty table or invalid format")
                     st.json(table)
-    
-    # Download original file
-    if result.get('downloadUrl'):
-        st.subheader("💾 Download Original File")
-        file_id = result.get('fileId')
-        filename = result.get('filename', 'document')
-        
-        if st.button("📥 Download Original File"):
-            # This would need to be implemented with the API client
-            st.info(f"Download link: {result.get('downloadUrl')}")
 
 
 def display_error(error_message: str) -> None:
