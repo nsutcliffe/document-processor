@@ -6,13 +6,13 @@
 Prototype a system that categorizes uploaded documents and extracts structured content (entities, dates, and tables) using LLM/VLMs, with emphasis on clarity, robustness, and fraud-prevention use cases.
 
 ### 1.2 High-level Architecture
-- **Backend**: Scala 2.13.16, http4s REST API, SBT 1.11.4
+- **Backend**: Scala 2.13.16, Scalatra REST API, SBT 1.11.4
 - **Frontend**: Python Streamlit app
 - **Database**: H2 (lightweight, local dev)
 - **LLM/VLM**: OpenRouter API (multiple models)
 
 ### 1.3 Key Decisions (from requirements)
-- **Communication**: REST over http4s. No streaming for v1 (future improvement).
+- **Communication**: REST over Scalatra. No streaming for v1 (future improvement).
 - **Processing mode**: Synchronous (user waits) and one file at a time (batch is future work).
 - **Storage**: Persist file metadata, checksum, processing status/history, extracted results, and original file bytes for download. If local DB storage of large files proves impractical, use a placeholder link (future S3 integration).
 - **LLM behavior**: Different models by file type where sensible (e.g., VLM for images/PDFs with images). Prompt to return strict JSON; implement retries and format-correction.
@@ -24,22 +24,15 @@ Prototype a system that categorizes uploaded documents and extracts structured c
 
 ### 2.1 Component Diagram
 ```
-┌─────────────────┐    HTTP/REST    ┌─────────────────┐
-│   Streamlit     │ ◄──────────────► │   Scala Backend │
-│   Frontend      │                 │   (http4s)      │
-└─────────────────┘                 └─────────────────┘
-                                             │
-                                             ▼
-                                   ┌─────────────────┐
-                                   │   H2 Database   │
-                                   │ (local dev)     │
-                                   └─────────────────┘
-                                             │
-                                             ▼
-                                   ┌─────────────────┐
-                                   │  OpenRouter.ai  │
-                                   │     API         │
-                                   └─────────────────┘
+┌─────────────────┐      HTTP/REST      ┌────────────────────────┐  HTTPS (OpenRouter API) ┌─────────────────┐
+│  Streamlit UI   │  ◄────────────────► │     Scala Backend      │  ◄─────────────────────►│  OpenRouter.ai  │
+│  (Frontend)     │                     │  (Scalatra + Services) │                         │   (LLM / VLM)   │
+└─────────────────┘                     └──────────┬─────────────┘                         └─────────────────┘
+                                                   │ JDBC
+                                                   ▼
+                                         ┌─────────────────┐
+                                         │      H2 DB      │
+                                         └─────────────────┘
 ```
 
 ### 2.2 Data Flow (synchronous)
@@ -100,7 +93,7 @@ table_data_json CLOB         NOT NULL            -- { headers:[], rows:[[]] }
 ```
 
 
-## 4. API Design (http4s)
+## 4. API Design (Scalatra)
 
 ### 4.1 Upload and process (synchronous)
 `POST /api/files/upload`
@@ -232,7 +225,7 @@ src/main/scala/
     LlmService.scala             -- OpenRouter client, retry/format-correction
     ExtractionService.scala      -- orchestration, schema validation
     DatabaseService.scala        -- H2 access (ScalikeJDBC)
-  routes/FileRoutes.scala       -- http4s endpoints
+  routes/FileRoutes.scala       -- Scalatra endpoints
   utils/{FileUtils.scala, JsonUtils.scala}
 ```
 
@@ -260,7 +253,7 @@ frontend/
 
 
 ## 8. Configuration & Environment
-- Backend: Scala 2.13.16, SBT 1.11.4; http4s 0.23.x; Circe for JSON; ScalikeJDBC; H2 2.x.
+- Backend: Scala 2.13.16, SBT 1.11.4; Scalatra 0.23.x; Circe for JSON; ScalikeJDBC; H2 2.x.
 - Frontend: Latest Python 3.x; use `venv` for local reproducibility.
 - Secrets: OpenRouter API key via environment variable (e.g., `OPENROUTER_API_KEY`).
 - Logging: concise request/response summaries; redact file content and secrets.
@@ -277,30 +270,34 @@ frontend/
 ## 10. Future Improvements
 - Streaming progress updates; background jobs with polling.
 - Batch uploads and parallel processing; multi-user support.
-- S3 storage and signed URLs; lifecycle management.
-- Duplicate detection using MD5/SHA-256 cache; idempotent processing.
+- S3 storage and store URLs in database.
+- Duplicate detection using MD5/SHA-256 cache to facilitate idempotent processing.
 - Advanced validation and typed JSON schema enforcement.
 - Model performance telemetry; dynamic model routing per file class.
 - Search/filter UI; manual corrections and re-run with feedback.
 
 
 ## 11. Implementation Plan (time-boxed)
-1) Backend core (http4s + DB + upload + download) — ~1.5h
-2) LLM integration (selection, prompts, retries, parsing) — ~1h
-3) Streamlit UI (upload, progress, results, CSV) — ~0.5h
-4) E2E test + docs (README with run instructions, assumptions) — ~0.5h
+1) Backend core (Scalatra + DB + upload + download)
+2) LLM integration (selection, prompts, retries, parsing)
+3) Streamlit UI (upload, progress, results, CSV)
+4) E2E test + docs (README with run instructions, assumptions)
 
 
-## 12. Dependencies (indicative)
+## 12. Dependencies (indicative only)
 
 ### Backend (SBT)
 ```scala
 scalaVersion := "2.13.16"
 
 libraryDependencies ++= Seq(
-  "org.http4s" %% "http4s-dsl" % "0.23.24",
-  "org.http4s" %% "http4s-ember-server" % "0.23.24",
-  "org.http4s" %% "http4s-circe" % "0.23.24",
+  "org.scalatra" %% "scalatra" % "2.8.4",
+  "org.scalatra" %% "scalatra-json" % "2.8.4",
+  "org.json4s" %% "json4s-jackson" % "4.0.7",
+  "org.eclipse.jetty" % "jetty-server" % "9.4.53.v20231009",
+  "org.eclipse.jetty" % "jetty-servlet" % "9.4.53.v20231009",
+  "org.eclipse.jetty" % "jetty-webapp" % "9.4.53.v20231009",
+  "javax.servlet" % "javax.servlet-api" % "3.1.0",
   "io.circe" %% "circe-core" % "0.14.6",
   "io.circe" %% "circe-parser" % "0.14.6",
   "org.scalikejdbc" %% "scalikejdbc" % "4.0.0",
