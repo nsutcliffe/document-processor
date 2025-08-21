@@ -9,117 +9,9 @@ import java.util.Base64
 import org.slf4j.LoggerFactory
 import scala.util.{Try, Success, Failure}
 
-final case class OpenRouterRequest(
-  model: String,
-  messages: List[OpenRouterMessage]
-)
-
-final case class OpenRouterMessage(
-  role: String,
-  content: Either[String, List[MessageContent]]
-)
-
-final case class MessageContent(
-  `type`: String,
-  text: Option[String] = None,
-  image_url: Option[ImageUrl] = None
-)
-
-final case class ImageUrl(
-  url: String,
-  detail: Option[String] = None
-)
-
-final case class OpenRouterResponse(
-  choices: List[OpenRouterChoice]
-)
-
-final case class OpenRouterChoice(
-  message: OpenRouterMessage
-)
-
-final case class CategoryResult(
-  category: String,
-  confidence_score: Double,
-  reasoning: String
-)
-object CategoryResult {
-  implicit val categoryResultDecoder: Decoder[CategoryResult] = deriveDecoder[CategoryResult]
-}
-
-final case class ExtractionResult(
-  entities: List[EntityResult],
-  dates: List[String],
-  tables: List[TableResult]
-)
-object ExtractionResult {
-  implicit val extractionResultEncoder: Encoder[ExtractionResult] = deriveEncoder[ExtractionResult]
-  implicit val extractionResultDecoder: Decoder[ExtractionResult] = deriveDecoder[ExtractionResult]
-}
-
-final case class EntityResult(
-  `type`: String,
-  value: String,
-  confidence: Double
-)
-object EntityResult {
-  implicit val entityResultEncoder: Encoder[EntityResult] = deriveEncoder[EntityResult]
-  implicit val entityResultDecoder: Decoder[EntityResult] = deriveDecoder[EntityResult]
-}
-
-final case class TableResult(
-  table_name: String,
-  headers: List[String],
-  rows: List[List[String]]
-)
-object TableResult {
-  implicit val tableResultEncoder: Encoder[TableResult] = deriveEncoder[TableResult]
-  implicit val tableResultDecoder: Decoder[TableResult] = deriveDecoder[TableResult]
-}
-
 class LlmService(config: AppConfig) {
   
   private val logger = LoggerFactory.getLogger(getClass)
-  
-  // JSON encoders and decoders
-  implicit val imageUrlEncoder: Encoder[ImageUrl] = Encoder.instance { imageUrl =>
-    val fields = List("url" -> Json.fromString(imageUrl.url)) ++ 
-                 imageUrl.detail.map(d => "detail" -> Json.fromString(d)).toList
-    Json.obj(fields: _*)
-  }
-  
-  implicit val imageUrlDecoder: Decoder[ImageUrl] = deriveDecoder[ImageUrl]
-  
-  implicit val messageContentEncoder: Encoder[MessageContent] = Encoder.instance { content =>
-    val fields = List("type" -> Json.fromString(content.`type`)) ++ 
-                 content.text.map(t => "text" -> Json.fromString(t)).toList ++
-                 content.image_url.map(u => "image_url" -> u.asJson).toList
-    Json.obj(fields: _*)
-  }
-  
-  implicit val messageContentDecoder: Decoder[MessageContent] = deriveDecoder[MessageContent]
-  
-  implicit val messageEncoder: Encoder[OpenRouterMessage] = Encoder.instance { msg =>
-    Json.obj(
-      "role" -> Json.fromString(msg.role),
-      "content" -> (msg.content match {
-        case Left(text) => Json.fromString(text)
-        case Right(contents) => contents.asJson
-      })
-    )
-  }
-  
-  implicit val requestEncoder: Encoder[OpenRouterRequest] = deriveEncoder[OpenRouterRequest]
-  implicit val responseDecoder: Decoder[OpenRouterResponse] = deriveDecoder[OpenRouterResponse]
-  implicit val choiceDecoder: Decoder[OpenRouterChoice] = deriveDecoder[OpenRouterChoice]
-  implicit val messageDecoder: Decoder[OpenRouterMessage] = Decoder.instance { cursor =>
-    for {
-      role <- cursor.get[String]("role")
-      content <- cursor.get[String]("content").map(Left(_)).orElse(
-        cursor.get[List[MessageContent]]("content").map(Right(_))
-      )
-    } yield OpenRouterMessage(role, content)
-  }
 
   def selectModel(fileType: String, hasImages: Boolean): String = {
     (fileType.toLowerCase, hasImages) match {
@@ -424,6 +316,7 @@ Do not include any other text, explanations, or apologies. Only return the JSON 
     msg.contains("overloaded")
   }
 
+  // FIXME: Look into why this isn't using error codes directly
   private def shouldRetry(error: Throwable): Boolean = {
     error.getMessage match {
       case msg if msg.contains("400") => 
@@ -431,7 +324,7 @@ Do not include any other text, explanations, or apologies. Only return the JSON 
         false
       case msg if msg.contains("429") => true  // Rate limit
       case msg if msg.contains("408") => true  // Timeout
-      case msg if msg.contains("5") => true    // 5xx server errors
+      case msg if msg.contains("5") => true    // 5xx server errors // FIXME: This could be matching on all sorts that is wrong.
       case _ => false
     }
   }
@@ -450,4 +343,121 @@ Do not include any other text, explanations, or apologies. Only return the JSON 
 
 object LlmService {
   def apply(config: AppConfig): LlmService = new LlmService(config)
+}
+
+// TODO: Move data model related case classes to a separate file
+final case class OpenRouterRequest(
+  model: String,
+  messages: List[OpenRouterMessage]
+)
+object OpenRouterRequest {
+  implicit val openRouterRequestEncoder: Encoder[OpenRouterRequest] = deriveEncoder[OpenRouterRequest]
+}
+
+final case class OpenRouterMessage(
+  role: String,
+  content: Either[String, List[MessageContent]]
+)
+object OpenRouterMessage {
+  implicit val openRouterMessageEncoder: Encoder[OpenRouterMessage] = Encoder.instance { msg =>
+    Json.obj(
+      "role" -> Json.fromString(msg.role),
+      "content" -> (msg.content match {
+        case Left(text) => Json.fromString(text)
+        case Right(contents) => contents.asJson
+      })
+    )
+  }
+  
+  implicit val openRouterMessageDecoder: Decoder[OpenRouterMessage] = Decoder.instance { cursor =>
+    for {
+      role <- cursor.get[String]("role")
+      content <- cursor.get[String]("content").map(Left(_)).orElse(
+        cursor.get[List[MessageContent]]("content").map(Right(_))
+      )
+    } yield OpenRouterMessage(role, content)
+  }
+}
+
+final case class MessageContent(
+  `type`: String,
+  text: Option[String] = None,
+  image_url: Option[ImageUrl] = None
+)
+object MessageContent {
+  implicit val messageContentEncoder: Encoder[MessageContent] = Encoder.instance { content =>
+    val fields = List("type" -> Json.fromString(content.`type`)) ++ 
+                 content.text.map(t => "text" -> Json.fromString(t)).toList ++
+                 content.image_url.map(u => "image_url" -> u.asJson).toList
+    Json.obj(fields: _*)
+  }
+  
+  implicit val messageContentDecoder: Decoder[MessageContent] = deriveDecoder[MessageContent]
+}
+
+final case class ImageUrl(
+  url: String,
+  detail: Option[String] = None
+)
+object ImageUrl {
+  implicit val imageUrlEncoder: Encoder[ImageUrl] = Encoder.instance { imageUrl =>
+    val fields = List("url" -> Json.fromString(imageUrl.url)) ++ 
+                 imageUrl.detail.map(d => "detail" -> Json.fromString(d)).toList
+    Json.obj(fields: _*)
+  }
+  
+  implicit val imageUrlDecoder: Decoder[ImageUrl] = deriveDecoder[ImageUrl]
+}
+
+final case class OpenRouterResponse(
+  choices: List[OpenRouterChoice]
+)
+object OpenRouterResponse {
+  implicit val openRouterResponseDecoder: Decoder[OpenRouterResponse] = deriveDecoder[OpenRouterResponse]
+}
+
+final case class OpenRouterChoice(
+  message: OpenRouterMessage
+)
+object OpenRouterChoice {
+  implicit val openRouterChoiceDecoder: Decoder[OpenRouterChoice] = deriveDecoder[OpenRouterChoice]
+}
+
+final case class CategoryResult(
+  category: String,
+  confidence_score: Double,
+  reasoning: String
+)
+object CategoryResult {
+  implicit val categoryResultDecoder: Decoder[CategoryResult] = deriveDecoder[CategoryResult]
+}
+
+final case class ExtractionResult(
+  entities: List[EntityResult],
+  dates: List[String],
+  tables: List[TableResult]
+)
+object ExtractionResult {
+  implicit val extractionResultEncoder: Encoder[ExtractionResult] = deriveEncoder[ExtractionResult]
+  implicit val extractionResultDecoder: Decoder[ExtractionResult] = deriveDecoder[ExtractionResult]
+}
+
+final case class EntityResult(
+  `type`: String,
+  value: String,
+  confidence: Double
+)
+object EntityResult {
+  implicit val entityResultEncoder: Encoder[EntityResult] = deriveEncoder[EntityResult]
+  implicit val entityResultDecoder: Decoder[EntityResult] = deriveDecoder[EntityResult]
+}
+
+final case class TableResult(
+  table_name: String,
+  headers: List[String],
+  rows: List[List[String]]
+)
+object TableResult {
+  implicit val tableResultEncoder: Encoder[TableResult] = deriveEncoder[TableResult]
+  implicit val tableResultDecoder: Decoder[TableResult] = deriveDecoder[TableResult]
 }

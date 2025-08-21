@@ -24,6 +24,7 @@ class ExtractionService(llmService: LlmService, dbService: DatabaseService) {
         logger.debug(s"File already processed: ${meta.id}")
         fetchResult(meta.id).getOrElse(createErrorResponse(meta, "File processed but results not found"))
       
+      // TODO: I think it's ok that cursor has handlded this case in this way for the time being, but we should consider a more robust solution (e.g. what if processing interrupted and database isn't updated?)
       case Some(file) if file.status == "processing" =>
         // File is currently being processed, return processing status
         logger.debug(s"File currently processing: ${meta.id}")
