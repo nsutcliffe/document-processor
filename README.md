@@ -21,11 +21,6 @@ CMD:
 set OPENROUTER_API_KEY=sk-or-...
 ```
 
-MAC/Linux:
-```bash
-export OPENROUTER_API_KEY=sk-or-...
-```
-
 ### 2) Start backend
 ```bash
 sbt clean compile
@@ -66,6 +61,14 @@ Backend:
 sbt test
 ```
 
+Frontend:
+```powershell
+cd frontend
+venv\Scripts\activate.bat
+pip install -q unittest-xml-reporting
+python -m unittest discover -s . -p "test_*.py" -v
+```
+
 ## Design
 
 See:
@@ -92,7 +95,7 @@ Key points to note:
 - Entity-level normalization and validation (e.g. normalise phone numbers, emails, address parsing , ...)
 - Confidence score from LLM is certainly un-reliable, look into improvements here
 - Ensure all free-text is extracted and searchable
-- Ensure where there are conversations, these are extracted and parsed into some sensible format, and displayable in the UI.
+- Ensure where there are conversations, these are extracted and parsed into some sensible format, and displayable in the UI (the chat_screenshot example file does not extract the conversation currently)
 - More robust handling of failures (e.g. items can get stuck in "processing" if say the server crashed with no way to recover)
 - Implement metrics for observability (e.g. how many LLM calls being made, success/failures of LLM (and other REST) calls, ...)
 - A few low level TODO's / FIXME's left in code.
