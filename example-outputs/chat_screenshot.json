@@ -1,0 +1,43 @@
+{
+    "entities": [
+        {
+            "type": "phone",
+            "value": "+44 73 7761 8918",
+            "confidence": 1
+        },
+        {
+            "type": "name",
+            "value": "Olina",
+            "confidence": 1
+        },
+        {
+            "type": "name",
+            "value": "Slava",
+            "confidence": 1
+        },
+        {
+            "type": "place",
+            "value": "www.acciocom",
+            "confidence": 1
+        },
+        {
+            "type": "payment_method",
+            "value": "USDT",
+            "confidence": 1
+        },
+        {
+            "type": "merchant",
+            "value": "ACCIo.com",
+            "confidence": 1
+        },
+        {
+            "type": "name",
+            "value": "Renata",
+            "confidence": 1
+        }
+    ],
+    "dates": [
+        "2023-04-28"
+    ],
+    "tables": []
+}

@@ -1,0 +1,31 @@
+{
+    "entities": [
+        {
+            "type": "place",
+            "value": "Guildford",
+            "confidence": 0.9
+        },
+        {
+            "type": "name",
+            "value": "Ming Luk",
+            "confidence": 0.9
+        },
+        {
+            "type": "name",
+            "value": "Porsche",
+            "confidence": 0.9
+        },
+        {
+            "type": "payment_method",
+            "value": "£25,000",
+            "confidence": 0.9
+        },
+        {
+            "type": "account_id",
+            "value": "K333 EAM",
+            "confidence": 0.9
+        }
+    ],
+    "dates": [],
+    "tables": []
+}

@@ -1,0 +1,64 @@
+{
+    "entities": [
+        {
+            "type": "name",
+            "value": "BV CRE8",
+            "confidence": 1
+        },
+        {
+            "type": "place",
+            "value": "Diestersteenweg 462",
+            "confidence": 1
+        },
+        {
+            "type": "place",
+            "value": "3680 Maaseik",
+            "confidence": 1
+        },
+        {
+            "type": "place",
+            "value": "Belgium",
+            "confidence": 1
+        },
+        {
+            "type": "account_id",
+            "value": "VAT BE0631922138",
+            "confidence": 1
+        },
+        {
+            "type": "account_id",
+            "value": "invoice number FA2022-0001",
+            "confidence": 1
+        },
+        {
+            "type": "account_id",
+            "value": "your VAT number BE0631922138",
+            "confidence": 1
+        }
+    ],
+    "dates": [
+        "2022-09-05",
+        "2022-10-05"
+    ],
+    "tables": [
+        {
+            "table_name": "Invoice Details",
+            "headers": [
+                "description",
+                "quantity",
+                "price",
+                "VAT",
+                "total (incl VAT)"
+            ],
+            "rows": [
+                [
+                    "comanage business pakket",
+                    "1 piece",
+                    "150,00",
+                    "31,50 (21%)",
+                    "181,50"
+                ]
+            ]
+        }
+    ]
+}
