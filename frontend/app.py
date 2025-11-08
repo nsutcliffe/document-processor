@@ -56,7 +56,7 @@ def main():
         try:
             # Try to make a request to check if backend is running
             import requests
-            response = requests.get(f"{api_client.base_url}/api/files", timeout=5)
+            response = requests.get(f"{api_client.base_url}/test", timeout=5)
             if response.status_code in [200, 404]:  # 404 is fine, means server is running
                 st.success("✅ Backend Connected")
             else:

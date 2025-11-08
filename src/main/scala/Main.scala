@@ -86,7 +86,7 @@ object Main {
     logger.info("✅ Services initialized")
     
     // Create FileRoutes and mount directly with Servlet 3.0 multipart support
-    val fileRoutes = new FileRoutes(fileService, llmService, dbService, extractionService)
+    val fileRoutes = new FileRoutes(fileService, dbService, extractionService)
     val holder = new ServletHolder(fileRoutes)
     val tmpDir = System.getProperty("java.io.tmpdir")
     holder.getRegistration.setMultipartConfig(new javax.servlet.MultipartConfigElement(

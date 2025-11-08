@@ -15,7 +15,6 @@ import scala.util.{Try, Success, Failure}
 
 class FileRoutes(
   fileService: FileService,
-  llmService: LlmService,
   dbService: DatabaseService,
   extractionService: ExtractionService
 ) extends ScalatraServlet with FileUploadSupport {
